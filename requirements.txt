@@ -1,4 +1,5 @@
-pynput
+pynput==1.7.6
+python-Levenshtein==0.25.1
 re
 time
 typing

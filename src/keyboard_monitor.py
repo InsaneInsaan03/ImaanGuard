@@ -2,14 +2,12 @@ import pynput.keyboard
 import time
 from typing import List, Callable
 from Levenshtein import distance as levenshtein_distance
+from lockdown import Lockdown
 
-# Placeholder for lockdown function (to be imported from lockdown.py later)
-def trigger_lockdown():
-    print("[INFO] [trigger_lockdown]: Lockdown triggered")
-    print("Haram content detected! Triggering lockdown...") # Debugging, replace with actual lockdown call
+
 
 class KeyboardMonitor:
-    def __init__(self, keywords: List[str], buffer_size: int = 20, lock_callback: Callable = trigger_lockdown):
+    def __init__(self, keywords: List[str], buffer_size: int = 20, lock_callback: Callable = None):
         """
         Initialize the keyboard monitor.
         """
@@ -19,11 +17,30 @@ class KeyboardMonitor:
         
         self.keywords = [k.lower() for k in keywords]
         self.buffer_size = buffer_size
+        self.lockdown = Lockdown()
+        self.violation_count = 0
         self.keystroke_buffer = [] # List of lists, each containing chars of a word
         self.current_word = [] # List for current word's characters
-        self.lock_callback = lock_callback
+        self.lock_callback = self.trigger_lockdown if lock_callback is None else lock_callback
         self.listener = None
         print("[INFO] [KeyboardMonitor.__init__]: Keyboard monitor initialized successfully")
+    
+    # Placeholder for lockdown function (to be imported from lockdown.py later)
+    def trigger_lockdown(self):
+        print("[INFO] [trigger_lockdown]: Lockdown triggered")
+        print("Haram content detected! Triggering lockdown...") # Debugging, replace with actual lockdown call
+        
+        print("[INFO] [KeyboardMonitor.trigger_lockdown]: Lockdown triggered")
+        print("[INFO] [KeyboardMonitor.trigger_lockdown]: Haram content detected!")
+
+        # Calculate lock duration: 2h * 2^violation_count, cap at 24h
+        base_duration = 30  # 2 hours in seconds
+        max_duration = 60 # 24 hours in seconds
+        duration = min(int(base_duration * (2 ** self.violation_count)), max_duration)
+
+        print(f"[DEBUG] [KeyboardMonitor.trigger_lockdown]: Triggering lockdown for {duration} seconds")
+        self.lockdown.lock_system(duration=duration, is_bypass=False)
+        self.violation_count += 1  # Increment violation count for next violation
     
     def on_press(self, key):
         """
