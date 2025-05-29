@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 import shutil
-import os
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -29,39 +29,75 @@ class Lockdown:
         self.is_locked = False
         self.lock_end_time = 0
         self.lock_duration = 0
+        self.violation_count = 1  # Start with first violation
+        self.last_violation_time = None  # Track last violation timestamp
         self.ENABLE_CACHE_NUKE = False  # Set to True in production
         self.is_bypass = False
         self._lock_thread = None
         self._stop_event = threading.Event()
         self._killed_pids = set()  # Track killed PIDs to avoid redundant kills
         logging.info("Lockdown manager initialized")
+        
+        # Start daily violation decay check
+        self._start_daily_decay_check()
 
-    def lock_system(self, duration: int, is_bypass: bool = False):
+    def _start_daily_decay_check(self):
+        """
+        Start a thread to run check_violation_decay daily.
+        """
+        def run_daily_check():
+            while not self._stop_event.is_set():
+                self.check_violation_decay()
+                time.sleep(86400)  # Wait 24 hours
+        decay_thread = threading.Thread(target=run_daily_check, daemon=True)
+        decay_thread.start()
+        logging.debug("Daily violation decay check thread started")
+
+    def lock_system(self, duration: Optional[int] = None, is_bypass: bool = False):
         """
         Enforce lockdown in a background thread.
         
         Args:
-            duration: Lock duration in seconds (e.g., 7200 for 2h, 172800 for 2 days).
+            duration: Lock duration in seconds (optional, calculated if None).
             is_bypass: True if triggered by bypass attempt (2-day lock).
         """
-        logging.info(f"Locking system for {duration} seconds (Bypass: {is_bypass})")
+        logging.info(f"Locking system (Bypass: {is_bypass}, Violation count: {self.violation_count})")
+        
+        # Calculate duration if not provided
+        if is_bypass:
+            duration = 300  # 2 days for bypass
+        elif duration is None:
+            durations = [30, 60, 120, 240]  # 2h, 4h, 8h, 16h
+            duration = durations[min(self.violation_count - 1, len(durations) - 1)] if self.violation_count <= 4 else 86400  # Cap at 24h
+        
         self.is_locked = True
         self.lock_duration = duration
-        self._killed_pids = set()
         self.lock_end_time = time.time() + duration
         self.is_bypass = is_bypass
+        self._killed_pids = set()
         self._stop_event.clear()
-        self._killed_pids.clear()
-
+        
+        # Increment violation count and reset 7-day clock (not for bypass)
+        if not is_bypass:
+            self.violation_count += 1
+            self.last_violation_time = datetime.now()  # Reset 7-day clock
+            logging.info("Violation detected, 7-day clean streak reset")
+        
         # Save lock state
+        logging.info(f"------------------------------------------[DEBUG] [KeyboardMonitor.trigger_lockdown]: Triggering lockdown for {duration} seconds")
         self._save_lock_state()
-
-        # Log event (placeholder for logger.py)
+        
+        # Log event
         logging.debug("Logging lockdown event (TODO: logger.py)")
-
-        # Start lockdown in background thread
-        self._lock_thread = threading.Thread(target=self._lock_loop)
-        self._lock_thread.start()
+        
+        # Check if lockdown thread is already running and alive
+        if self._lock_thread is not None and self._lock_thread.is_alive():
+            logging.info("Lockdown thread already running, not starting a new one")
+        else:
+            # Start lockdown in background thread
+            self._lock_thread = threading.Thread(target=self._lock_loop, daemon=True)
+            self._lock_thread.start()
+            logging.info("Lockdown thread started")
 
     def _lock_loop(self):
         """
@@ -85,9 +121,10 @@ class Lockdown:
         """
         try:
             with ThreadPoolExecutor(max_workers=3) as executor:
-                executor.submit(self._kill_explorer)
-                executor.submit(self._block_tools)
-                executor.submit(self._kill_network_processes)                
+                # executor.submit(self._kill_explorer)
+                # executor.submit(self._block_tools)
+                executor.submit(self._kill_network_processes)
+                # executor.submit(self.shutdown_system)
         except Exception as e:
             logging.error(f"Error enforcing restrictions: {e}")
 
@@ -100,16 +137,34 @@ class Lockdown:
             with open(self.lock_file, 'r') as f:
                 state = json.load(f)
             if state.get('is_locked', False) and time.time() < state.get('lock_end_time', 0):
+                self.violation_count = state.get('violation_count', 1)  # Restore or default to 1
+                self.last_violation_time = datetime.fromisoformat(state.get('last_violation_time', None)) if state.get('last_violation_time') else None
                 remaining_duration = state['lock_end_time'] - time.time()
-                logging.info(f"Reapplying lock for {remaining_duration} seconds")
+                logging.info(f"Reapplying lock for {remaining_duration} seconds, violation count: {self.violation_count}")
                 self.lock_system(max(0, int(remaining_duration)), is_bypass=state.get('is_bypass', False))
             else:
                 logging.info("No active lock or lock expired")
-                self._clear_lock_state()
+                self._clear_lock_state()  # Clear lock file but preserve violation_count
+                self.check_violation_decay()  # Check for decay after lock expires
         except FileNotFoundError:
-            logging.debug("No lock file found, no lock to reapply")
+            logging.debug("No lock file found, assuming fresh start")
+            self.violation_count = 1  # Reset only for fresh start
+            self.last_violation_time = None
         except Exception as e:
             logging.error(f"Error checking lock state: {e}")
+
+    def check_violation_decay(self):
+        """
+        Decrease violation count to 1 if no violations for 7 days.
+        """
+        if self.violation_count > 1 and self.last_violation_time:
+            now = datetime.now()
+            days_since_violation = (now - self.last_violation_time).days
+            if days_since_violation >= 7:
+                logging.info("7 clean days! Decreasing violation count to 1")
+                self.violation_count = 1
+                self.last_violation_time = None  # Reset violation time
+                self._save_lock_state()
 
     def _save_lock_state(self):
         """
@@ -122,7 +177,9 @@ class Lockdown:
                 'lock_start_time': time.time(),
                 'lock_end_time': self.lock_end_time,
                 'lock_duration': self.lock_duration,
-                'is_bypass': self.is_bypass
+                'is_bypass': self.is_bypass,
+                'violation_count': self.violation_count,
+                'last_violation_time': self.last_violation_time.isoformat() if self.last_violation_time else None
             }
             os.makedirs(os.path.dirname(self.lock_file), exist_ok=True)
             with open(self.lock_file, 'w') as f:
@@ -142,6 +199,16 @@ class Lockdown:
                 logging.info("Lock state cleared")
         except Exception as e:
             logging.error(f"Error clearing lock state: {e}")
+    
+    def shutdown_system(self):
+        """
+        Shutdown the system immediately.
+        """
+        logging.info("Initiating system shutdown")
+        try:
+            os.system("shutdown /s /t 0")
+        except Exception as e:
+            logging.error(f"Failed to shutdown system: {e}")
 
     def _kill_explorer(self):
         """
@@ -161,7 +228,6 @@ class Lockdown:
                     break  # No need to scan further
         except psutil.Error as e:
             logging.error(f"Error killing explorer.exe: {e}")
-
 
     def _block_tools(self):
         """
@@ -195,7 +261,6 @@ class Lockdown:
             logging.info("Firewall rules added")
         except Exception as e:
             logging.error(f"Error disabling internet: {e}")
-
 
     def _clear_browser_cache(self, browser_name):
         """
@@ -250,8 +315,6 @@ class Lockdown:
         except Exception as e:
             logging.error(f"Error during browser process scan: {e}")
 
-
-
     def unlock_system(self):
         """
         Stop lockdown and restore system state.
@@ -276,12 +339,25 @@ class Lockdown:
             # Clear lock state
             self._clear_lock_state()
 
+            # Check for violation decay after unlock
+            self.check_violation_decay()
+
             # Log unlock event
             logging.debug("Logging unlock event (TODO: logger.py)")
         except Exception as e:
             logging.error(f"Error unlocking system: {e}")
         finally:
             self._killed_pids.clear()
+
+    def reset_violation_count(self):
+        """
+        Reset violation count to 1 after a period of no violations (e.g., 7 days).
+        """
+        logging.debug("Resetting violation count")
+        self.violation_count = 1
+        self.last_violation_time = None
+        self._save_lock_state()
+        logging.info("Violation count reset to 1")
 
 def main():
     """
@@ -290,11 +366,10 @@ def main():
     logging.info("Starting lockdown test")
     lockdown = Lockdown()
     lockdown.check_and_reapply_lock()  # Check for existing lock
-    lockdown.lock_system(duration=30)  # Test with 30-second lock
+    lockdown.lock_system()  # Test with dynamic duration
     time.sleep(2)  # Allow thread to start
     logging.info("Lockdown test completed")
 
 if __name__ == "__main__":
     main()
     logging.info("Program exited")
-

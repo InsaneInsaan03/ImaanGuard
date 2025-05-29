@@ -33,14 +33,8 @@ class KeyboardMonitor:
         print("[INFO] [KeyboardMonitor.trigger_lockdown]: Lockdown triggered")
         print("[INFO] [KeyboardMonitor.trigger_lockdown]: Haram content detected!")
 
-        # Calculate lock duration: 2h * 2^violation_count, cap at 24h
-        base_duration = 30  # 2 hours in seconds
-        max_duration = 60 # 24 hours in seconds
-        duration = min(int(base_duration * (2 ** self.violation_count)), max_duration)
 
-        print(f"[DEBUG] [KeyboardMonitor.trigger_lockdown]: Triggering lockdown for {duration} seconds")
-        self.lockdown.lock_system(duration=duration, is_bypass=False)
-        self.violation_count += 1  # Increment violation count for next violation
+        self.lockdown.lock_system(is_bypass=False)
     
     def on_press(self, key):
         """
@@ -99,7 +93,7 @@ class KeyboardMonitor:
     
     def check_buffer(self):
         """
-        Check buffer for blocked keywords using Levenshtein distance.
+        Check buffer for blocked keywords by substring matching.
         """
         print("[DEBUG] [KeyboardMonitor.check_buffer]: Checking buffer for keywords")
         print(f"[DEBUG] [KeyboardMonitor.check_buffer]: Current buffer: {self.keystroke_buffer}")
@@ -109,9 +103,9 @@ class KeyboardMonitor:
             word = ''.join(word_chars).lower()
             print(f"[DEBUG] [KeyboardMonitor.check_buffer]: Checking word: {word}")
             for keyword in self.keywords:
-                # Use Levenshtein distance with threshold of 1 for fuzzy matching
-                if levenshtein_distance(word, keyword) <= 1 or word == keyword:
-                    print(f"[INFO] [KeyboardMonitor.check_buffer]: Keyword detected: {keyword} (matched: {word})")
+                # Check if keyword is substring of the word
+                if keyword in word:
+                    print(f"[INFO] [KeyboardMonitor.check_buffer]: Keyword detected: {keyword} (found inside: {word})")
                     self.lock_callback()
                     self.keystroke_buffer.clear()
                     self.current_word = []
@@ -122,6 +116,7 @@ class KeyboardMonitor:
             print("[INFO] [KeyboardMonitor.check_buffer]: Buffer full, no keywords detected, clearing buffer")
             self.keystroke_buffer.clear()
             self.current_word = []
+
     
     def start(self):
         """
