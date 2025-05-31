@@ -1,0 +1,34 @@
+
+✅ STEP 1: Create the BAT Launcher
+📁 Go to the folder where your compiled .exe lives (e.g., C:\Users\Skipper\ImaanGuard\dist\).
+
+📄 Create a new file named:
+launch_imaan.bat
+
+📝 Contents:
+
+@echo off
+cd /d "C:\Users\Skipper\ImaanGuard\dist"
+start "" "ImaanGuard.exe"
+⚠️ Replace the path above with your actual full path to the folder where ImaanGuard.exe is.
+
+✅ STEP 2: Set Up Task Scheduler (ON LOGON)
+📌 Open PowerShell (with Admin rights) and paste this beast:
+
+
+schtasks /Create `
+  /TN "ImaanGuardBoot" `
+  /TR "C:\Users\Skipper\ImaanGuard\dist\launch_imaan.bat" `
+  /SC ONLOGON `
+  /RL HIGHEST `
+  /F
+
+
+✅ STEP 3: Test It Right Now (No reboot needed)
+💣 Try it manually:
+
+	schtasks /Run /TN "ImaanGuardBoot"
+
+
+Your app should launch — boom 💥
+

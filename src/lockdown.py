@@ -68,7 +68,7 @@ class Lockdown:
             duration = 300  # 2 days for bypass
         elif duration is None:
             durations = [30, 60, 120, 240]  # 2h, 4h, 8h, 16h
-            duration = durations[min(self.violation_count - 1, len(durations) - 1)] if self.violation_count <= 4 else 86400  # Cap at 24h
+            duration = durations[min(self.violation_count - 1, len(durations) - 1)] if self.violation_count <= 4 else 500  # Cap at 24h = 86400sec
         
         self.is_locked = True
         self.lock_duration = duration
@@ -122,8 +122,9 @@ class Lockdown:
         try:
             with ThreadPoolExecutor(max_workers=3) as executor:
                 # executor.submit(self._kill_explorer)
-                # executor.submit(self._block_tools)
+                executor.submit(self._block_tools)
                 executor.submit(self._kill_network_processes)
+                executor.submit(self._clear_browser_cache)
                 # executor.submit(self.shutdown_system)
         except Exception as e:
             logging.error(f"Error enforcing restrictions: {e}")
@@ -269,7 +270,7 @@ class Lockdown:
         try:
             user_profile = os.getenv('USERPROFILE')
             if browser_name == 'chrome.exe':
-                cache_path = os.path.join(user_profile, r'AppData\\Local\\Google\\Chrome\\User Data\\Default')
+                cache_path = os.path.join(user_profile, r'AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache')
             elif browser_name == 'firefox.exe':
                 cache_path = os.path.join(user_profile, r'AppData\\Local\\Mozilla\\Firefox\\Profiles')
                 # Firefox profiles folder contains many profiles, clear Cache subfolder inside each
